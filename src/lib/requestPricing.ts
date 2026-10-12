@@ -51,6 +51,17 @@ export function getRequestLineCorrectedQuantity(line: any): number {
   ));
 }
 
+/**
+ * Completed request values represent what was actually handed over. Before a
+ * request is completed, the approved quantity remains the working estimate.
+ */
+export function getRequestLineFinancialQuantity(line: any, requestStatus?: string | null): number {
+  if (['COMPLETED', 'CLOSED', 'CLOSED_PARTIAL'].includes(String(requestStatus || '').toUpperCase())) {
+    return getRequestLineDeliveredQuantity(line);
+  }
+  return getRequestLineCorrectedQuantity(line);
+}
+
 export function getRequestLineAmount(line: any, quantity?: number | null): number {
   const effectiveQuantity = quantity
     ?? line?.replacementQty

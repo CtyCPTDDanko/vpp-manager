@@ -10,7 +10,7 @@ import MonthlyApprovalHistoryTooltip from '../../components/MonthlyApprovalHisto
 import ReopenAdminApprovalAction from '../../components/ReopenAdminApprovalAction';
 import RequestHistoryActor from '../../components/RequestHistoryActor';
 import { getApprovalActionLabel, getLineStatusLabel, getRequestStatusLabel } from '../../lib/statusLabels';
-import { getRequestLineAmount, getRequestLineUnitPrice } from '../../lib/requestPricing';
+import { getRequestLineAmount, getRequestLineFinancialQuantity, getRequestLineUnitPrice } from '../../lib/requestPricing';
 import type { User } from '../../context/AppContext';
 import type { ViewMode } from '../Requests';
 import { Layout, Card, Table, Tooltip, Avatar } from 'antd';
@@ -623,7 +623,7 @@ export default function RequestsDetail({ requestId, navigationIds, onNavigate, s
     totals.delivered += Number(line.qtyDelivered || 0);
     totals.amount += getRequestLineAmount(
       line,
-      line.replacementQty ?? line.qtyAdminApproved ?? line.qtyApproved ?? line.qtyRequested ?? 0,
+      getRequestLineFinancialQuantity(line, data.status),
     );
     return totals;
   }, { requested: 0, managerApproved: 0, adminApproved: 0, delivered: 0, amount: 0 });
@@ -819,7 +819,7 @@ export default function RequestsDetail({ requestId, navigationIds, onNavigate, s
       key: 'totalPrice',
       align: 'right' as const,
       render: (l: any) => (
-        <span className="text-xs font-black text-slate-800">{getRequestLineAmount(l, l.replacementQty ?? l.qtyApproved ?? l.qtyRequested).toLocaleString('vi-VN')}</span>
+        <span className="text-xs font-black text-slate-800">{getRequestLineAmount(l, getRequestLineFinancialQuantity(l, data.status)).toLocaleString('vi-VN')}</span>
       )
     },
     {
@@ -2623,7 +2623,7 @@ export default function RequestsDetail({ requestId, navigationIds, onNavigate, s
                                    {getRequestLineUnitPrice(l).toLocaleString('vi-VN')}
                                </td>
                                <td className="border border-black p-2 text-right font-bold">
-                                   {getRequestLineAmount(l, displayQtyApproved ?? displayQtyRequested).toLocaleString('vi-VN')}
+                                   {getRequestLineAmount(l, getRequestLineFinancialQuantity(l, data.status)).toLocaleString('vi-VN')}
                                </td>
                                <td className="border border-black p-2 text-[10px] italic leading-tight">{l.note || '—'}</td>
                            </tr>
@@ -2635,7 +2635,7 @@ export default function RequestsDetail({ requestId, navigationIds, onNavigate, s
                             </td>
                             <td className="border border-black p-2 text-right" colSpan={2}>
                                 {filteredLines.reduce((sum: number, line: any) => {
-                                  const qty = line.replacementQty ?? line.qtyApproved ?? line.qtyRequested;
+                                  const qty = getRequestLineFinancialQuantity(line, data.status);
                                   return sum + getRequestLineAmount(line, qty);
                                 }, 0).toLocaleString('vi-VN')} VNĐ
                             </td>

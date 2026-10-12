@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../lib/api';
 import { Printer, ArrowLeft } from 'lucide-react';
-import { getRequestLineAmount, getRequestLineUnitPrice } from '../../lib/requestPricing';
+import { getRequestLineAmount, getRequestLineFinancialQuantity, getRequestLineUnitPrice } from '../../lib/requestPricing';
 import RequestHistoryActor from '../../components/RequestHistoryActor';
 
 function getItemSortGroupName(itemName: string) {
@@ -381,7 +381,7 @@ const RequestPrint: React.FC = () => {
                     {getRequestLineUnitPrice(l).toLocaleString('vi-VN')}
                   </td>
                   <td className="text-right font-bold">
-                    {getRequestLineAmount(l, displayQtyApproved ?? displayQtyRequested).toLocaleString('vi-VN')}
+                    {getRequestLineAmount(l, getRequestLineFinancialQuantity(l, data.status)).toLocaleString('vi-VN')}
                   </td>
                   <td className="italic text-[10px] leading-tight">{l.note || '—'}</td>
                 </tr>
@@ -394,7 +394,7 @@ const RequestPrint: React.FC = () => {
               </td>
               <td className="text-right" colSpan={2}>
                 {filteredLines.reduce((sum: number, line: any) => {
-                  const qty = line.replacementQty ?? line.qtyApproved ?? line.qtyRequested;
+                  const qty = getRequestLineFinancialQuantity(line, data.status);
                   return sum + getRequestLineAmount(line, qty);
                 }, 0).toLocaleString('vi-VN')} VNĐ
               </td>
