@@ -511,6 +511,11 @@ const PurchasesList: React.FC<PurchasesListProps> = ({ onCreateNew, onViewDetail
   // Bulk Selection & Printing states
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isBulkMode, setIsBulkMode] = useState(false);
+  const [showBulkFastTrackModal, setShowBulkFastTrackModal] = useState(false);
+  const [bulkFastTracking, setBulkFastTracking] = useState(false);
+  const [bulkSupplier, setBulkSupplier] = useState('');
+  const [bulkExpectedDate, setBulkExpectedDate] = useState('');
+  const [bulkWarehouse, setBulkWarehouse] = useState<'MAIN' | 'VE_SINH'>('MAIN');
   const [selectedPrintType, setSelectedPrintType] = useState<'ALL' | 'VPP' | 'VE_SINH' | 'DEPT_VPP' | 'DEPT_VS' | 'REQ_DEPT_VPP' | 'REQ_DEPT_VS' | 'REQ_ITEM_VPP' | 'REQ_ITEM_VS'>('ALL');
   const [selectedPrintDetailMode, setSelectedPrintDetailMode] = useState<'SUMMARY' | 'DETAIL'>('SUMMARY');
   const [showPrintMenu, setShowPrintMenu] = useState(false);
@@ -556,6 +561,13 @@ const PurchasesList: React.FC<PurchasesListProps> = ({ onCreateNew, onViewDetail
     return saved ? JSON.parse(saved) : null;
   }, []);
   const userRole = currentUser?.role || 'EMPLOYEE';
+
+  const selectedFastTrackPOs = useMemo(() => data.filter((po: any) =>
+    selectedIds.includes(po.id)
+    && po.status === 'DRAFT'
+    && (po.source === 'AUTO' || String(po.id || '').startsWith('PO-BO-'))
+  ), [data, selectedIds]);
+  const selectedFastTrackInvalidCount = selectedIds.length - selectedFastTrackPOs.length;
 
   const checkHasMatchingItem = (category: 'VPP' | 'VE_SINH'): boolean => {
     const selectedPOs = data.filter(po => selectedIds.includes(po.id));
@@ -736,6 +748,55 @@ const PurchasesList: React.FC<PurchasesListProps> = ({ onCreateNew, onViewDetail
     } finally {
       fetchInFlightRef.current = false;
       if (!silent) setLoading(false);
+    }
+  };
+
+  const handleBulkFastTrack = async () => {
+    if (!bulkSupplier.trim()) {
+      toast.warning('Vui lòng nhập nhà cung cấp');
+      return;
+    }
+    if (!bulkExpectedDate) {
+      toast.warning('Vui lòng chọn ngày dự kiến giao');
+      return;
+    }
+    if (selectedFastTrackPOs.length === 0) {
+      toast.warning('Không có phiếu nháp tự động phù hợp để xử lý nhanh');
+      return;
+    }
+
+    setBulkFastTracking(true);
+    const succeeded: string[] = [];
+    const failed: Array<{ id: string; message: string }> = [];
+    for (const po of selectedFastTrackPOs) {
+      try {
+        await api.post(`/purchases/${po.id}/fast-track`, {
+          supplier: bulkSupplier.trim(),
+          expectedDate: bulkExpectedDate,
+          warehouseCode: bulkWarehouse,
+        });
+        succeeded.push(po.id);
+      } catch (err: any) {
+        failed.push({
+          id: po.id,
+          message: err.response?.data?.error || 'Không thể xử lý nhanh',
+        });
+      }
+    }
+
+    setBulkFastTracking(false);
+    setShowBulkFastTrackModal(false);
+    setSelectedIds(failed.map(item => item.id));
+    await fetchData(false, true);
+
+    if (succeeded.length > 0) {
+      toast.success(`Đã chuyển ${succeeded.length} phiếu sang chờ nhập kho.`);
+    }
+    if (selectedFastTrackInvalidCount > 0) {
+      toast.info(`Đã bỏ qua ${selectedFastTrackInvalidCount} phiếu không phải phiếu nháp tự động.`);
+    }
+    if (failed.length > 0) {
+      toast.error(`${failed.length} phiếu xử lý chưa thành công: ${failed.map(item => item.id).join(', ')}`);
     }
   };
 
@@ -2493,6 +2554,29 @@ const PurchasesList: React.FC<PurchasesListProps> = ({ onCreateNew, onViewDetail
                            <button onClick={() => setIsBulkMode(!isBulkMode)} className={`p-2.5 rounded-xl border transition flex items-center gap-1.5 text-[10px] font-black uppercase ${isBulkMode ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-200 text-slate-500'}`}>
                               <CheckSquare className="w-4 h-4"/> {isBulkMode ? 'Ẩn ô chọn' : 'Chọn nhiều'}
                            </button>
+                           {userRole === 'ADMIN' && isBulkMode && selectedIds.length > 0 && (
+                             <button
+                               type="button"
+                               onClick={() => {
+                                 if (selectedFastTrackPOs.length === 0) {
+                                   toast.warning('Các phiếu đã chọn không có phiếu nháp tự động phù hợp.');
+                                   return;
+                                 }
+                                 const suppliers = Array.from(new Set(
+                                   selectedFastTrackPOs
+                                     .map((po: any) => String(po.supplier || '').trim())
+                                     .filter(Boolean)
+                                 ));
+                                 setBulkSupplier(suppliers.length === 1 ? suppliers[0] : '');
+                                 setShowBulkFastTrackModal(true);
+                               }}
+                               disabled={bulkFastTracking || selectedFastTrackPOs.length === 0}
+                               className="bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 text-white px-4 py-2.5 rounded-xl text-[10px] font-black transition-all flex items-center shadow-sm whitespace-nowrap active:scale-95 uppercase gap-1.5"
+                               title="Chuyển các phiếu nháp tự động đã chọn đến trạng thái chờ nhập kho"
+                             >
+                               <Truck className="w-4 h-4" /> Xử lý nhanh ({selectedFastTrackPOs.length})
+                             </button>
+                           )}
                             <button
                               onClick={() => fetchData(false, true)}
                               disabled={loading}
@@ -2781,6 +2865,114 @@ const PurchasesList: React.FC<PurchasesListProps> = ({ onCreateNew, onViewDetail
             )}
 
         </div>
+
+         {/* BULK FAST-TRACK MODAL */}
+         {showBulkFastTrackModal && (
+           <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 no-print">
+             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100">
+               <div className="px-6 py-5 border-b border-slate-100 flex items-start justify-between gap-4">
+                 <div>
+                   <div className="flex items-center gap-2 text-amber-600 mb-1">
+                     <Truck className="w-5 h-5" />
+                     <h3 className="text-base font-black uppercase tracking-tight">Xử lý nhanh nhiều phiếu</h3>
+                   </div>
+                   <p className="text-xs text-slate-500 font-medium">
+                     Chuyển các phiếu nháp tự động đã chọn đến trạng thái chờ nhập kho.
+                   </p>
+                 </div>
+                 <button
+                   type="button"
+                   onClick={() => setShowBulkFastTrackModal(false)}
+                   disabled={bulkFastTracking}
+                   className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                 >
+                   <X className="w-5 h-5" />
+                 </button>
+               </div>
+
+               <div className="p-6 space-y-5">
+                 <div className="grid grid-cols-3 gap-3">
+                   <div className="rounded-2xl bg-slate-50 border border-slate-100 p-3 text-center">
+                     <p className="text-[9px] font-black text-slate-400 uppercase">Đã chọn</p>
+                     <p className="text-xl font-black text-slate-800 mt-1">{selectedIds.length}</p>
+                   </div>
+                   <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-3 text-center">
+                     <p className="text-[9px] font-black text-emerald-600 uppercase">Sẽ xử lý</p>
+                     <p className="text-xl font-black text-emerald-700 mt-1">{selectedFastTrackPOs.length}</p>
+                   </div>
+                   <div className="rounded-2xl bg-amber-50 border border-amber-100 p-3 text-center">
+                     <p className="text-[9px] font-black text-amber-600 uppercase">Bỏ qua</p>
+                     <p className="text-xl font-black text-amber-700 mt-1">{selectedFastTrackInvalidCount}</p>
+                   </div>
+                 </div>
+
+                 <div>
+                   <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">Nhà cung cấp *</label>
+                   <input
+                     type="text"
+                     value={bulkSupplier}
+                     onChange={(event) => setBulkSupplier(event.target.value)}
+                     disabled={bulkFastTracking}
+                     placeholder="Nhập tên nhà cung cấp dùng cho các phiếu"
+                     className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 disabled:bg-slate-50"
+                   />
+                 </div>
+
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                   <div>
+                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">Ngày dự kiến giao *</label>
+                     <input
+                       type="date"
+                       value={bulkExpectedDate}
+                       onChange={(event) => setBulkExpectedDate(event.target.value)}
+                       disabled={bulkFastTracking}
+                       className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 disabled:bg-slate-50"
+                     />
+                   </div>
+                   <div>
+                     <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">Kho nhập *</label>
+                     <select
+                       value={bulkWarehouse}
+                       onChange={(event) => setBulkWarehouse(event.target.value as 'MAIN' | 'VE_SINH')}
+                       disabled={bulkFastTracking}
+                       className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 disabled:bg-slate-50"
+                     >
+                       <option value="MAIN">Kho chính</option>
+                       <option value="VE_SINH">Kho vệ sinh</option>
+                     </select>
+                   </div>
+                 </div>
+
+                 <div className="rounded-2xl bg-amber-50 border border-amber-100 px-4 py-3 flex gap-3">
+                   <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                   <p className="text-[11px] leading-relaxed font-semibold text-amber-800">
+                     Mỗi phiếu hợp lệ sẽ được chuyển sang chờ nhập kho và tạo một phiếu nhập kho chờ xử lý. Phiếu không hợp lệ sẽ được bỏ qua và giữ lại để kiểm tra.
+                   </p>
+                 </div>
+               </div>
+
+               <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+                 <button
+                   type="button"
+                   onClick={() => setShowBulkFastTrackModal(false)}
+                   disabled={bulkFastTracking}
+                   className="px-5 py-3 rounded-xl border border-slate-200 bg-white text-slate-600 text-[10px] font-black uppercase hover:bg-slate-100 disabled:opacity-50"
+                 >
+                   Hủy
+                 </button>
+                 <button
+                   type="button"
+                   onClick={handleBulkFastTrack}
+                   disabled={bulkFastTracking || !bulkSupplier.trim() || !bulkExpectedDate || selectedFastTrackPOs.length === 0}
+                   className="px-5 py-3 rounded-xl bg-amber-500 text-white text-[10px] font-black uppercase hover:bg-amber-600 disabled:bg-slate-300 flex items-center gap-2 shadow-lg shadow-amber-200"
+                 >
+                   {bulkFastTracking ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
+                   {bulkFastTracking ? 'Đang xử lý...' : `Xử lý ${selectedFastTrackPOs.length} phiếu`}
+                 </button>
+               </div>
+             </div>
+           </div>
+         )}
 
          {/* REPORT SETUP MODAL */}
          {showReportSetupModal && (
