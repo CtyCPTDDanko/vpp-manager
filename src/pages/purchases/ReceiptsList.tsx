@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import api from '../../lib/api';
 import { 
   Search, Calendar, Package, 
-  CheckCircle, Clock, ChevronRight, AlertTriangle, PlusCircle, RefreshCw
+  CheckCircle, Clock, ChevronRight, AlertTriangle, PlusCircle, RefreshCw,
+  CheckSquare, Square, Zap
 } from 'lucide-react';
 
 interface ReceiptsListProps {
@@ -15,6 +16,8 @@ const ReceiptsList: React.FC<ReceiptsListProps> = ({ onViewDetail }) => {
   const [loadError, setLoadError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState('PENDING');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCompleting, setBulkCompleting] = useState(false);
 
   const filteredData = data.filter(d => {
     const matchSearch = d.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -41,6 +44,69 @@ const ReceiptsList: React.FC<ReceiptsListProps> = ({ onViewDetail }) => {
   const handleOpenDetail = (id: string) => {
     const navIds = filteredData.map(d => d.id);
     onViewDetail(id, navIds);
+  };
+
+  const isFastCompletable = (receipt: any) => {
+    const displayStatus = receipt.status === 'COMPLETED' && Number(receipt.totalRemaining || 0) > 0
+      ? 'PARTIAL_RECEIVED'
+      : receipt.status;
+    return ['PENDING', 'PARTIAL_RECEIVED', 'PARTIALLY_RECEIVED'].includes(displayStatus)
+      && Number(receipt.totalRemaining || 0) > 0;
+  };
+
+  const selectableFilteredIds = filteredData.filter(isFastCompletable).map(receipt => receipt.id);
+  const allSelectableFilteredSelected = selectableFilteredIds.length > 0
+    && selectableFilteredIds.every(id => selectedIds.has(id));
+
+  const toggleReceipt = (id: string) => {
+    setSelectedIds(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllFiltered = () => {
+    setSelectedIds(current => {
+      const next = new Set(current);
+      if (allSelectableFilteredSelected) selectableFilteredIds.forEach(id => next.delete(id));
+      else selectableFilteredIds.forEach(id => next.add(id));
+      return next;
+    });
+  };
+
+  const handleBulkFastComplete = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0 || bulkCompleting) return;
+    if (!window.confirm(`Xác nhận nhập toàn bộ số lượng còn lại và hoàn thành nhanh ${ids.length} phiếu đã chọn?\n\nPhiếu có hàng lệch, lỗi hoặc vật tư thay thế đang chờ xử lý sẽ không được tự động hoàn thành.`)) return;
+
+    setBulkCompleting(true);
+    const succeeded: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+
+    for (const id of ids) {
+      try {
+        await api.post(`/receipts/${id}/confirm`, { mode: 'FULL', fillRemaining: true }, { timeout: 90000 });
+        succeeded.push(id);
+      } catch (error: any) {
+        failed.push({
+          id,
+          reason: error?.response?.data?.error || error?.message || 'Không thể hoàn thành phiếu',
+        });
+      }
+    }
+
+    setSelectedIds(new Set(failed.map(item => item.id)));
+    await fetchData();
+    setBulkCompleting(false);
+
+    const summary = [`Đã nhập và hoàn thành nhanh ${succeeded.length}/${ids.length} phiếu.`];
+    if (failed.length > 0) {
+      summary.push('', 'Phiếu chưa xử lý được:');
+      failed.forEach(item => summary.push(`- ${item.id}: ${item.reason}`));
+    }
+    window.alert(summary.join('\n'));
   };
 
 
@@ -172,6 +238,24 @@ const ReceiptsList: React.FC<ReceiptsListProps> = ({ onViewDetail }) => {
                             />
                         </div>
                     </div>
+
+                    {selectedIds.size > 0 && (
+                      <div className="flex w-full flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 shadow-sm">
+                        <div className="flex items-center gap-2 text-sm font-black text-emerald-800">
+                          <CheckSquare className="h-5 w-5" />
+                          {selectedIds.size} phiếu đã chọn
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button type="button" disabled={bulkCompleting} onClick={() => setSelectedIds(new Set())} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 disabled:opacity-50">
+                            Bỏ chọn
+                          </button>
+                          <button type="button" disabled={bulkCompleting} onClick={handleBulkFastComplete} className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white shadow-md shadow-emerald-500/20 transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+                            {bulkCompleting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                            {bulkCompleting ? 'Đang nhập kho...' : 'Nhập & hoàn thành nhanh'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                 </div>
 
                 {loadError && <div role="alert" className="mx-4 my-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
@@ -189,6 +273,11 @@ const ReceiptsList: React.FC<ReceiptsListProps> = ({ onViewDetail }) => {
                     <table className="w-full text-left whitespace-nowrap">
                         <thead className="bg-slate-50 sticky top-0 z-0">
                             <tr>
+                                <th className="w-12 border-b border-slate-100 p-4 text-center">
+                                  <button type="button" onClick={toggleAllFiltered} disabled={selectableFilteredIds.length === 0 || bulkCompleting} title="Chọn tất cả phiếu đủ điều kiện trong danh sách đang lọc" className="text-slate-400 transition hover:text-indigo-600 disabled:opacity-30">
+                                    {allSelectableFilteredSelected ? <CheckSquare className="h-5 w-5 text-indigo-600" /> : <Square className="h-5 w-5" />}
+                                  </button>
+                                </th>
                                 <th className="p-4 text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Mã Phiếu Nhập</th>
                                 <th className="p-4 text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">Chứng từ gốc (PO)</th>
                                 <th className="p-4 text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 w-48">Nhà Cung Cấp</th>
@@ -200,7 +289,7 @@ const ReceiptsList: React.FC<ReceiptsListProps> = ({ onViewDetail }) => {
                         <tbody className="divide-y divide-slate-100 bg-white">
                             {filteredData.length === 0 && !loading && !loadError && (
                                 <tr>
-                                    <td colSpan={6} className="p-10 text-center text-slate-500">
+                                    <td colSpan={7} className="p-10 text-center text-slate-500">
                                         <Package className="w-12 h-12 text-slate-200 mx-auto mb-3" />
                                         <p className="font-bold">{!data.length ? 'Chưa có phiếu nhập kho.' : searchTerm ? 'Không có phiếu khớp từ khóa trong tab đang chọn.' : activeTab === 'PENDING' ? 'Không có phiếu đang chờ kiểm hàng / nhập kho.' : activeTab === 'DISCREPANCY' ? 'Không có phiếu báo lệch / lỗi.' : activeTab === 'COMPLETED' ? 'Không có phiếu đã nhập đủ.' : 'Không có phiếu phù hợp bộ lọc.'}</p>
                                         {data.length > 0 && <><p className="mt-2 text-sm">Hệ thống có {data.length} phiếu nhập kho; các phiếu này nằm ngoài bộ lọc đang chọn.</p><button type="button" onClick={() => { setActiveTab('ALL'); setSearchTerm(''); }} className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700">Xem tất cả phiếu</button></>}
@@ -209,6 +298,11 @@ const ReceiptsList: React.FC<ReceiptsListProps> = ({ onViewDetail }) => {
                             )}
                             {filteredData.map(d => (
                                 <tr key={d.id} onClick={() => handleOpenDetail(d.id)} className="hover:bg-indigo-50/30 cursor-pointer transition group">
+                                    <td className="w-12 p-4 text-center" onClick={event => event.stopPropagation()}>
+                                      <button type="button" disabled={!isFastCompletable(d) || bulkCompleting} onClick={() => toggleReceipt(d.id)} title={isFastCompletable(d) ? 'Chọn phiếu để nhập và hoàn thành nhanh' : 'Phiếu không đủ điều kiện xử lý nhanh'} className="text-slate-400 transition hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-25">
+                                        {selectedIds.has(d.id) ? <CheckSquare className="h-5 w-5 text-indigo-600" /> : <Square className="h-5 w-5" />}
+                                      </button>
+                                    </td>
                                     <td className="p-4 border-l-2 border-transparent group-hover:border-indigo-500">
                                         <div className="flex items-center gap-3">
                                             <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center text-orange-600 font-black shrink-0 border border-orange-100 shadow-sm">RC</div>
