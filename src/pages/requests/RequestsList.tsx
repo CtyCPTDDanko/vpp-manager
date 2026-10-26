@@ -632,7 +632,7 @@ export default function RequestsList({ requests, currentUser, setViewMode, setAc
   const quickAllocatableRequests = useMemo(() => selectedIds
     .map(id => requests.find(request => request.id === id))
     .filter((request): request is VPPRequest => Boolean(request))
-    .filter(request => ['READY_TO_ISSUE', 'PARTIALLY_ISSUED', 'PARTIALLY_APPROVED', 'PARTIAL_ADMIN_APPROVED'].includes(request.status))
+    .filter(request => ['BACKORDER', 'READY_TO_ISSUE', 'PARTIALLY_ISSUED', 'PARTIALLY_APPROVED', 'PARTIAL_ADMIN_APPROVED'].includes(request.status))
     .filter(request => (request.lines || []).some((line: any) => {
       const target = Number(line.qtyAdminApproved ?? line.qtyManagerApproved ?? line.qtyApproved ?? line.qtyRequested ?? 0);
       return Math.max(0, target - Number(line.qtyDelivered || 0)) > 0;
