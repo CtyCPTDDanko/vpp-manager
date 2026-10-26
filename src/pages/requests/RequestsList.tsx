@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, type MouseEvent, type UIEvent, type WheelEvent } from 'react';
-import { Plus, Download, Search, FileText, XCircle, ChevronLeft, ChevronRight, Eye, CheckSquare, GitBranch, Printer, ListChecks, ChevronDown, RotateCcw, FileSpreadsheet, CornerUpLeft, ArrowUpDown, ArrowUp, ArrowDown, CalendarDays, PackageOpen, Droplets, Boxes, LoaderCircle } from 'lucide-react';
+import { Plus, Download, Search, FileText, XCircle, ChevronLeft, ChevronRight, Eye, CheckSquare, GitBranch, Printer, ListChecks, ChevronDown, RotateCcw, FileSpreadsheet, CornerUpLeft, ArrowUpDown, ArrowUp, ArrowDown, CalendarDays, PackageOpen, Droplets, Boxes, LoaderCircle, Zap } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Dropdown, Select } from 'antd';
 import { flushSync } from 'react-dom';
@@ -179,6 +179,7 @@ export default function RequestsList({ requests, currentUser, setViewMode, setAc
   const [reportItemMvpp, setReportItemMvpp] = useState<string[]>([]);
   const [reportDepartment, setReportDepartment] = useState('ALL');
   const [isSubmittingBatch, setIsSubmittingBatch] = useState(false);
+  const [isQuickAllocating, setIsQuickAllocating] = useState(false);
   const [previewReq, setPreviewReq] = useState<VPPRequest | null>(null);
   const [creationLockOpen, setCreationLockOpen] = useState(false);
   const [catalogPricePreview, setCatalogPricePreview] = useState<any | null>(null);
@@ -625,6 +626,64 @@ export default function RequestsList({ requests, currentUser, setViewMode, setAc
       showToast(err.response?.data?.error || 'Lỗi trả lại hàng loạt', 'error');
     } finally {
       setIsSubmittingBatch(false);
+    }
+  };
+
+  const quickAllocatableRequests = useMemo(() => selectedIds
+    .map(id => requests.find(request => request.id === id))
+    .filter((request): request is VPPRequest => Boolean(request))
+    .filter(request => ['READY_TO_ISSUE', 'PARTIALLY_ISSUED', 'PARTIALLY_APPROVED', 'PARTIAL_ADMIN_APPROVED'].includes(request.status))
+    .filter(request => (request.lines || []).some((line: any) => {
+      const target = Number(line.qtyAdminApproved ?? line.qtyManagerApproved ?? line.qtyApproved ?? line.qtyRequested ?? 0);
+      return Math.max(0, target - Number(line.qtyDelivered || 0)) > 0;
+    })), [selectedIds, requests]);
+
+  const handleQuickAllocation = async () => {
+    if (quickAllocatableRequests.length === 0 || isQuickAllocating) return;
+    if (!window.confirm(`Cấp phát nhanh cho ${quickAllocatableRequests.length} phiếu đã chọn? Hệ thống sẽ ghi nhận toàn bộ số lượng còn phải cấp theo từng phiếu.`)) return;
+
+    setIsQuickAllocating(true);
+    const failures: string[] = [];
+    let successCount = 0;
+    try {
+      // Process sequentially to avoid two selected requests decrementing the same
+      // stock row concurrently and to keep each delivery history independent.
+      for (const request of quickAllocatableRequests) {
+        const lineIssues = (request.lines || []).map((line: any) => {
+          const target = Number(line.qtyAdminApproved ?? line.qtyManagerApproved ?? line.qtyApproved ?? line.qtyRequested ?? 0);
+          const remaining = Math.max(0, target - Number(line.qtyDelivered || 0));
+          return remaining > 0 ? {
+            lineId: line.id,
+            qtyDelivered: remaining,
+            issueItemId: line.replacementItemId || line.issueItemId || line.itemId,
+            issueNote: 'Cấp phát nhanh cho nhân sự',
+          } : null;
+        }).filter(Boolean);
+
+        if (lineIssues.length === 0) continue;
+        try {
+          await api.post(`/requests/${encodeURIComponent(request.id)}/issue`, {
+            warehouseCode: request.warehouseCode || 'MAIN',
+            deliveryType: 'NORMAL',
+            note: 'Cấp phát nhanh cho nhân sự',
+            lineIssues,
+          });
+          successCount += 1;
+        } catch (error: any) {
+          failures.push(`${request.id}: ${error.response?.data?.error || 'Không thể cấp phát'}`);
+        }
+      }
+
+      setSelectedIds([]);
+      setIsBulkMode(false);
+      await refreshData();
+      if (failures.length > 0) {
+        showToast(`Đã cấp phát ${successCount} phiếu; ${failures.length} phiếu lỗi. ${failures.slice(0, 2).join(' | ')}`, 'warning');
+      } else {
+        showToast(`Đã cấp phát nhanh thành công ${successCount} phiếu cho nhân sự.`, 'success');
+      }
+    } finally {
+      setIsQuickAllocating(false);
     }
   };
 
@@ -1185,7 +1244,7 @@ export default function RequestsList({ requests, currentUser, setViewMode, setAc
                 <div className="shrink-0 px-3 py-2 rounded-xl bg-white border border-slate-200 text-[10px] font-black uppercase tracking-wider text-slate-500">
                   Hiển thị <span className="text-indigo-600">{filteredRequests.length}</span>/{requests.length}
                 </div>
-                {(currentUser.role === 'MANAGER' || currentUser.role === 'ADMIN') && (
+                {(currentUser.role === 'MANAGER' || currentUser.role === 'ADMIN' || currentUser.role === 'WAREHOUSE') && (
                   <button 
                     onClick={toggleBulkMode}
                     className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition ${isBulkMode ? 'bg-rose-50 border border-rose-200 text-rose-600' : 'bg-slate-100 border border-slate-200 text-slate-700 hover:bg-slate-200'}`}
@@ -1334,7 +1393,7 @@ export default function RequestsList({ requests, currentUser, setViewMode, setAc
             </div>
           )}
           {/* Batch actions redesigned */}
-          {(currentUser.role === 'MANAGER' || currentUser.role === 'ADMIN') && selectedIds.length > 0 && isBulkMode && (
+          {(currentUser.role === 'MANAGER' || currentUser.role === 'ADMIN' || currentUser.role === 'WAREHOUSE') && selectedIds.length > 0 && isBulkMode && (
             <div className="px-6 py-3 bg-indigo-600 text-white flex flex-col md:flex-row justify-between items-center gap-4 animate-in slide-in-from-top duration-300">
               <div className="flex items-center gap-4">
                 <span className="text-sm font-black tracking-tight">{selectedIds.length} phiếu đã chọn</span>
@@ -1345,6 +1404,12 @@ export default function RequestsList({ requests, currentUser, setViewMode, setAc
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                {(currentUser.role === 'WAREHOUSE' || currentUser.role === 'ADMIN') && quickAllocatableRequests.length > 0 && (
+                  <button disabled={isQuickAllocating || isSubmittingBatch} onClick={() => { void handleQuickAllocation(); }} className="px-3 py-1.5 bg-violet-500 hover:bg-violet-400 text-white font-black rounded-lg text-[10px] uppercase tracking-wider flex items-center gap-1.5 transition shadow-sm disabled:cursor-not-allowed disabled:opacity-60" title="Cấp phát toàn bộ số lượng còn thiếu cho các phiếu đã duyệt">
+                    {isQuickAllocating ? <LoaderCircle className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5"/>}
+                    {isQuickAllocating ? 'Đang cấp phát…' : `Cấp phát nhanh (${quickAllocatableRequests.length})`}
+                  </button>
+                )}
                 {selectedIds.every(id => isApprovable(requests.find(r => r.id === id)!)) && (
                   <button disabled={isSubmittingBatch} onClick={handleBatchApprove} className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-white font-black rounded-lg text-[10px] uppercase tracking-wider flex items-center gap-1.5 transition shadow-sm">
                     <CheckSquare className="w-3.5 h-3.5"/> Duyệt hàng loạt
